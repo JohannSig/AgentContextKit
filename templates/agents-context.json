@@ -1,0 +1,11 @@
+{
+  "budgets": {
+    "rootAgentsLines": 80,
+    "areaAgentsLines": 150,
+    "ruleLines": 100,
+    "rootClaudeLines": 40,
+    "chainTokens": 8000,
+    "codexChainBytes": 32768
+  },
+  "ignore": ["node_modules", ".git", "dist", "build", "bin", "obj", ".anvil-worktrees"]
+}

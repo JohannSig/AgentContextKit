@@ -1,0 +1,14 @@
+{
+  "name": "agent-context-kit",
+  "version": "0.1.0",
+  "description": "Tool-agnostic, token-lean layout for AI coding-agent instruction files (AGENTS.md + CLAUDE.md shims + path-scoped rules).",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "agents-init": "scripts/agents-init.mjs",
+    "agents-lint": "scripts/agents-lint.mjs",
+    "agents-sync": "scripts/agents-sync.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}
