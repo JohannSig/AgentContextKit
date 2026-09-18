@@ -4,14 +4,26 @@ import { join, resolve, relative, sep } from 'node:path';
 
 export const DEFAULT_CONFIG = {
   budgets: {
+    // Lines are a readability check only: one 2000-char line costs as much as twenty short ones, so
+    // the token budgets below are what actually bound what an agent pays.
     rootAgentsLines: 80,
     areaAgentsLines: 150,
     ruleLines: 100,
     rootClaudeLines: 40,
+    rootAgentsTokens: 2000,
+    areaAgentsTokens: 3000,
+    ruleTokens: 1500,
+    maxLineChars: 800,
+    docsPageTokens: 4000,
+    baselineSlackTokens: 50,
     chainTokens: 8000,
     codexChainBytes: 32768,
   },
   ignore: ['node_modules', '.git', 'dist', 'build', 'bin', 'obj', '.anvil-worktrees'],
+  // docs/ linting is opt-in: list glob patterns (relative to the repo root) for the pages you manage.
+  docs: { include: [], exclude: [] },
+  // Growth ratchet: written by `agents-lint --write-baseline`, checked whenever the file exists.
+  baselineFile: '.agents-context.baseline.json',
 };
 
 export const SHIM = '@AGENTS.md';
@@ -23,6 +35,8 @@ export function loadConfig(root) {
   return {
     budgets: { ...DEFAULT_CONFIG.budgets, ...(user.budgets ?? {}) },
     ignore: user.ignore ?? DEFAULT_CONFIG.ignore,
+    docs: { ...DEFAULT_CONFIG.docs, ...(user.docs ?? {}) },
+    baselineFile: user.baselineFile ?? DEFAULT_CONFIG.baselineFile,
   };
 }
 
@@ -31,6 +45,21 @@ export const rel = (root, p) => posix(relative(root, p)) || '.';
 export const tokens = (bytes) => Math.round(bytes / 4);
 export const read = (p) => readFileSync(p, 'utf8');
 export const lines = (s) => s.split(/\r?\n/).filter((l, i, a) => !(i === a.length - 1 && l === '')).length;
+
+/** Glob (`*`, `**`, `?`) to RegExp over posix relative paths. `**` also matches across `/`. */
+export function globToRegExp(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') { re += '.*'; i++; if (glob[i + 1] === '/') i++; }
+      else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`);
+}
+export const matchesAny = (patterns, relPath) => patterns.some((g) => globToRegExp(g).test(relPath));
 
 /** Walk the tree, skipping ignored dir names. Yields absolute file paths. */
 export function* walk(dir, ignore) {

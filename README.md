@@ -75,20 +75,48 @@ Zero dependencies, Node 18+. Run from anywhere; pass the target repo root.
 node scripts/agents-init.mjs <repo> --name "Repo"          # root AGENTS.md, CLAUDE.md, config
 node scripts/agents-init.mjs <repo> --area src/api          # nested AGENTS.md + shim
 node scripts/agents-init.mjs <repo> --rule tests            # glob rule skeleton
-node scripts/agents-lint.mjs <repo> [--strict]              # budgets, imports, shims, dead links, chain cost
+node scripts/agents-lint.mjs <repo> [--strict]              # budgets, imports, shims, dead links, chain cost, docs, baseline
+node scripts/agents-lint.mjs <repo> --write-baseline        # record current sizes (the growth ratchet, see Guardrails)
+node scripts/agents-verify.mjs <repo> [--base <ref>]        # prove a restructure lost no text
 node scripts/agents-sync.mjs <repo> --cursor --copilot      # generate other formats; add --check in CI
 ```
 
 `agents-init` never overwrites. `agents-lint` exits 1 on errors; `--strict` also fails on warnings. Put `agents-lint --strict` and `agents-sync --check` in CI once a repo is migrated.
 
-`.agents-context.json` at the repo root (dropped by `agents-init`) tunes lint: `ignore` lists directory names to skip (defaults cover `node_modules`, `bin`, `obj`, `dist`), `budgets` sets line and chain limits. Raise `chainTokens` for deep monorepos, lower it for small libraries.
+`.agents-context.json` at the repo root (dropped by `agents-init`) tunes lint: `ignore` lists directory names to skip (defaults cover `node_modules`, `bin`, `obj`, `dist`), `budgets` sets the limits below, `docs` opts docs pages into linting, `baselineFile` names the growth baseline. Raise `chainTokens` for deep monorepos, lower it for small libraries.
+
+## Guardrails: keeping it lean
+
+A layout drifts back to bloat one feature at a time, each adding "just a paragraph". Line budgets don't stop that: a 2000-character line costs as much as twenty short ones, and one real repo held 34k tokens in 121 lines. So the lint bounds the cost directly. Every check is a warning; `--strict` (use it in CI) makes them fail the build.
+
+| Check | `budgets` key | Default |
+|---|---|---|
+| Tokens in the root `AGENTS.md` | `rootAgentsTokens` | 2000 |
+| Tokens in an area `AGENTS.md` | `areaAgentsTokens` | 3000 |
+| Tokens in a rule body | `ruleTokens` | 1500 |
+| Longest line in an instruction file | `maxLineChars` | 800 |
+| Ancestor chain from root to a leaf | `chainTokens` | 8000 |
+| Tokens in one docs page | `docsPageTokens` | 4000 |
+| Growth allowed before the baseline trips | `baselineSlackTokens` | 50 |
+
+Tokens are estimated as bytes / 4. Line counts remain as a readability check.
+
+**Docs pages.** Set `docs.include` (and optionally `docs.exclude`) to glob patterns such as `["docs/**/*.md"]` and the lint also checks those pages: size against `docsPageTokens`, dead links (an error), and index completeness. A split directory `docs/x/` must be fully linked from `docs/x.md`, so pages can't go stale unseen. Docs are opt-in because existing repos usually hold old specs and plans you don't want to police.
+
+**Growth baseline.** Absolute budgets are set once and then have slack. The baseline closes it. `agents-lint --write-baseline` records every instruction file's size in `.agents-context.baseline.json`; commit it. From then on a file that grows past its recorded size (plus `baselineSlackTokens`), or a new instruction file that isn't listed, fails `--strict`. The fix is either to move the detail to `docs/` or to re-run `--write-baseline` in the same PR, which puts the growth in the diff for a reviewer to accept or reject. Set budgets just above today's sizes and lower them over time.
+
+**Telling agents.** The root template carries a "Where new knowledge goes" rule so agents that add features know: a rule needed on every edit is 1–3 lines in the area `AGENTS.md`; everything else goes to the matching `docs/` page and its index; no change logs.
+
+**What it can't do.** Judge value. In review, ask of each added line: *would removing this cause an agent to make mistakes?* If not, cut it.
+
+Development: `npm test` (Node's built-in runner, no dependencies).
 
 ## Adopting in a new repo
 
 1. `agents-init <repo> --name …`, fill in the root `AGENTS.md`: what the repo is, hard rules, a map table, build/test commands. Stop at 80 lines.
 2. For each area an agent will edit, `agents-init --area <dir>` and write only what it must know whenever it edits there.
 3. Anything procedural goes to `docs/<topic>.md` with a one-line pointer in the nearest `AGENTS.md`.
-4. `agents-lint <repo>`; fix until clean.
+4. `agents-lint <repo>`; fix until clean, then `agents-lint <repo> --write-baseline` and commit the baseline.
 5. Only if a second tool is in use: `agents-sync` for Cursor/Copilot, or copy `templates/gemini-settings.json`.
 
 ## Applying to a repo that already has `CLAUDE.md` files
@@ -99,7 +127,7 @@ On a branch, never `main`:
 2. `agents-init . --name "<Repo>"` to add whatever is missing; existing files are left alone.
 3. Split and classify sections. This is editorial; let a coding agent do it with the recipe as its brief (prompt in [MIGRATION.md](MIGRATION.md#3-split)).
 4. Rename and shim: `git mv <dir>/CLAUDE.md <dir>/AGENTS.md`, then write `@AGENTS.md` into a new `<dir>/CLAUDE.md`.
-5. `agents-lint . --strict` clean, then verify in a fresh session as described in [MIGRATION.md](MIGRATION.md#5-verify).
-6. Add the strict lint (and `agents-sync --check` if Cursor/Copilot are used) to CI.
+5. `agents-lint . --strict` clean and `agents-verify . --base <ref before the migration>` reporting nothing missing, then verify in a fresh session as described in [MIGRATION.md](MIGRATION.md#5-verify).
+6. `agents-lint . --write-baseline`, commit it, and add the strict lint (and `agents-sync --check` if Cursor/Copilot are used) to CI.
 
 Full recipe with the classification table: [MIGRATION.md](MIGRATION.md).
