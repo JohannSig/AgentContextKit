@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // agents-lint.mjs — validate an agent-context layout (AGENTS.md + CLAUDE.md shims + .claude/rules).
-// Usage: node agents-lint.mjs [repoRoot] [--strict] [--quiet]
-// Exit 1 on errors (or on warnings with --strict).
+// Usage: node agents-lint.mjs [repoRoot] [--strict] [--quiet] [--write-baseline]
+// Exit 1 on errors (or on warnings with --strict). --write-baseline records the current size of every
+// instruction file in the baseline file (see README "Guardrails") and exits 0.
+import { writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   loadConfig, walk, read, lines, tokens, rel, SHIM, findImports, findLocalLinks,
-  parseFrontmatter, existsSync, fileSize,
+  parseFrontmatter, existsSync, fileSize, matchesAny,
 } from './lib.mjs';
 
 const args = process.argv.slice(2);
@@ -18,13 +20,14 @@ const issues = [];
 const err = (file, msg) => issues.push({ level: 'error', file: rel(root, file), msg });
 const warn = (file, msg) => issues.push({ level: 'warn', file: rel(root, file), msg });
 
-const agents = [], claudes = [], rules = [];
+const agents = [], claudes = [], rules = [], docsFiles = [];
 for (const p of walk(root, cfg.ignore)) {
   const name = basename(p);
   const r = rel(root, p);
   if (name === 'AGENTS.md') agents.push(p);
   else if (name === 'CLAUDE.md') claudes.push(p);
   else if (/^(?:.*\/)?\.claude\/rules\/.+\.md$/.test(r)) rules.push(p);
+  else if (r.endsWith('.md') && matchesAny(cfg.docs.include, r) && !matchesAny(cfg.docs.exclude, r)) docsFiles.push(p);
 }
 
 const isRoot = (p) => dirname(p) === root;
@@ -37,12 +40,27 @@ const checkLinks = (p, c) => {
   }
 };
 
+// A line budget alone does not bound cost (one 2000-char line = twenty short ones), so files are
+// also held to a token budget and long lines are reported.
+const tokenBudget = (p, t, limit, name) => {
+  if (t > limit) warn(p, `~${t} tokens, ${name} budget ${limit}. Move task-specific sections to docs/ and link them.`);
+};
+const longLines = (p, c) => {
+  const over = [];
+  c.split(/\r?\n/).forEach((l, i) => { if (l.length > B.maxLineChars) over.push({ line: i + 1, len: l.length }); });
+  if (!over.length) return;
+  const worst = over.reduce((a, b) => (b.len > a.len ? b : a));
+  warn(p, `${over.length} line(s) over ${B.maxLineChars} chars (longest ${worst.len}, line ${worst.line}). Long paragraphs hide their cost from line budgets: split them or move the detail to docs/.`);
+};
+
 // --- AGENTS.md checks ---------------------------------------------------------
 for (const p of agents) {
   const c = read(p);
   const n = lines(c);
   const budget = isRoot(p) ? B.rootAgentsLines : B.areaAgentsLines;
   if (n > budget) warn(p, `${n} lines, budget ${budget}. Move task-specific sections to docs/ and link them.`);
+  tokenBudget(p, tokens(fileSize(p)), isRoot(p) ? B.rootAgentsTokens : B.areaAgentsTokens, isRoot(p) ? 'rootAgentsTokens' : 'areaAgentsTokens');
+  longLines(p, c);
   for (const { line, token } of findImports(c)) err(p, `line ${line}: '${token}' looks like an @import. Use a plain link; imports load eagerly in Claude Code and are ignored by other tools.`);
   checkLinks(p, c);
   if (!isRoot(p)) {
@@ -89,8 +107,44 @@ for (const p of rules) {
   else if (fm.paths.length === 0) err(p, `'paths:' is empty.`);
   const n = lines(fm.body);
   if (n > B.ruleLines) warn(p, `${n} lines, budget ${B.ruleLines}.`);
+  tokenBudget(p, tokens(Buffer.byteLength(fm.body)), B.ruleTokens, 'ruleTokens');
+  longLines(p, fm.body);
   for (const { line, token } of findImports(fm.body)) err(p, `line ${line}: '${token}' — @imports inside rules are NOT expanded by Claude Code (verified 2026-09). Inline the content or link it.`);
   checkLinks(p, fm.body);
+}
+
+// --- docs/ checks (opt-in: "docs.include" in .agents-context.json) ---------------
+for (const p of docsFiles) {
+  const t = tokens(fileSize(p));
+  if (t > B.docsPageTokens) warn(p, `~${t} tokens, docsPageTokens budget ${B.docsPageTokens}. Split it into per-topic pages behind an index.`);
+  checkLinks(p, read(p));
+}
+// A split directory `docs/x/` must be fully listed in its index `docs/x.md`, or pages go stale unseen.
+for (const idx of docsFiles) {
+  const pages = docsFiles.filter((f) => dirname(f) === idx.replace(/\.md$/, ''));
+  if (!pages.length) continue;
+  const linked = new Set(findLocalLinks(read(idx)).map((l) => resolve(dirname(idx), l.target)));
+  for (const pg of pages) if (!linked.has(pg)) warn(idx, `does not link '${rel(root, pg)}'. Every page in a split directory must be listed in its index.`);
+}
+
+// --- Growth baseline ----------------------------------------------------------
+// Instruction files may not grow past their recorded size without the PR also updating the baseline,
+// which makes the growth a visible, reviewed line in the diff instead of a silent drift.
+const tracked = [...agents, ...claudes.filter((p) => !isShim(read(p))), ...rules];
+const sizes = Object.fromEntries(tracked.map((p) => [rel(root, p), tokens(fileSize(p))]).sort(([a], [b]) => (a < b ? -1 : 1)));
+const baselinePath = join(root, cfg.baselineFile);
+if (args.includes('--write-baseline')) {
+  const note = 'Written by agents-lint --write-baseline. An instruction file growing past its size here (plus slack) fails the lint; raise it deliberately in the PR that needs it.';
+  writeFileSync(baselinePath, JSON.stringify({ note, files: sizes }, null, 2) + '\n');
+  console.log(`wrote ${cfg.baselineFile} (${Object.keys(sizes).length} files)`);
+  process.exit(0);
+}
+if (existsSync(baselinePath)) {
+  const base = JSON.parse(read(baselinePath)).files ?? {};
+  for (const [f, t] of Object.entries(sizes)) {
+    if (!(f in base)) warn(join(root, f), `not in ${cfg.baselineFile}. New instruction file: run agents-lint --write-baseline and commit it so the addition is reviewed.`);
+    else if (t > base[f] + B.baselineSlackTokens) warn(join(root, f), `grew from ~${base[f]} to ~${t} tokens (+${t - base[f]}). If that is intended, run agents-lint --write-baseline and commit the baseline so the growth is reviewed; otherwise move detail to docs/.`);
+  }
 }
 
 // --- Chain cost report --------------------------------------------------------
@@ -122,7 +176,9 @@ for (const [d] of contentDirs) {
 // --- Output -------------------------------------------------------------------
 if (!quiet) {
   console.log(`agent-context lint — ${root}`);
-  console.log(`  AGENTS.md: ${agents.length}   CLAUDE.md: ${claudes.length}   rules: ${rules.length}\n`);
+  console.log(`  AGENTS.md: ${agents.length}   CLAUDE.md: ${claudes.length}   rules: ${rules.length}   docs pages: ${docsFiles.length}\n`);
+  const biggest = Object.entries(sizes).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (biggest.length) console.log('  Largest instruction files (~tokens): ' + biggest.map(([f, t]) => `${f} ${t}`).join(', ') + '\n');
   if (rows.length) {
     console.log('  Ancestor-chain cost when an agent first touches a file under:');
     const w = Math.max(9, ...rows.map((r) => r.dir.length));

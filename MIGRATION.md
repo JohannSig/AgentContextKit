@@ -35,6 +35,10 @@ For each file, largest chain first:
 
 Do not rewrite prose while moving it. Moving and trimming are separate commits; it keeps review honest.
 
+**Prefer many small pages to one big one.** A reference section over ~3k tokens (a controller catalogue, an entity table, a long procedure) shouldn't become one big doc: an agent that needs a single row would load all of it. Make `docs/<topic>.md` an index (a table of page → what it covers) and put one page per topic (per controller, per prompt kind, per tool group) in `docs/<topic>/`. Move rows and paragraphs verbatim (a table row becomes a `## Title` section) and keep the old path as the index so existing links still work. Set `docs.include` so the pages fall under the size budget and the index-completeness check.
+
+**Check `###` headings too.** Splitting on `##` leaves any `###` block sitting under an unrelated `##` untouched, and those are often feature notes that were appended over time. Scan every `###` under a section you kept.
+
 This step is editorial and suits a coding agent working inside the target repo. A brief that has worked:
 
 ```
@@ -69,8 +73,27 @@ Fix relative links: paths inside a moved section are now relative to `docs/`. Li
 ## 5. Verify
 
 - `agents-lint <repo> --strict` is clean.
+- `agents-verify <repo> --base <ref before the migration>` reports nothing missing. A paragraph counts as present if it appears anywhere in the current instruction files or docs pages (link targets and whitespace are ignored), so moved text passes and a deleted or reworded paragraph is listed. Fix each entry or accept the loss on purpose.
 - In Claude Code, from the repo root, ask it to read one file in a migrated directory, then run `/context`. The nested `CLAUDE.md` should be listed and the `AGENTS.md` content should be visible to it.
 - In Codex, from the repo root, the root `AGENTS.md` alone loads; confirm the "nearest `AGENTS.md`" line is present.
+
+## 6. Lock it in
+
+Run `agents-lint <repo> --write-baseline` and commit `.agents-context.baseline.json`, and make sure `.agents-context.json` sets budgets just above today's sizes. From then on a file that grows needs an explicit baseline update in the same PR. See "Guardrails" in the README.
+
+## Worked example (Anvil, 2026-09-18, after migration)
+
+Ancestor chain when an agent first touches a file under the directory, including the old ~3.5k root file:
+
+| Directory | Before | After |
+|---|---|---|
+| `Anvil.Api/Mcp` | 49.1k | 5.2k |
+| `Anvil.Api` | 37.7k | 4.3k |
+| `Anvil.Runner` | 32.3k | 3.1k |
+| `Anvil.Web` | 22.8k | 4.0k |
+| root (always loaded) | 3.5k | 1.6k |
+
+What got it there: reference sections (controller catalogue, entity/enum tables, prompt rules) moved to `docs/`, then the big pages split into 100+ per-topic pages behind indexes. The line budget never mattered: the worst file had 121 lines and 34k tokens. That is why the token budgets and the baseline exist. The first version missed one appended feature note sitting as a `###` under an unrelated `##`.
 
 ## Worked example (Regla, 2026-09-18, before migration)
 

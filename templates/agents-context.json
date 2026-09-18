@@ -4,8 +4,16 @@
     "areaAgentsLines": 150,
     "ruleLines": 100,
     "rootClaudeLines": 40,
+    "rootAgentsTokens": 2000,
+    "areaAgentsTokens": 3000,
+    "ruleTokens": 1500,
+    "maxLineChars": 800,
+    "docsPageTokens": 4000,
+    "baselineSlackTokens": 50,
     "chainTokens": 8000,
     "codexChainBytes": 32768
   },
-  "ignore": ["node_modules", ".git", "dist", "build", "bin", "obj", ".anvil-worktrees"]
+  "ignore": ["node_modules", ".git", "dist", "build", "bin", "obj", ".anvil-worktrees"],
+  "docs": { "include": ["docs/**/*.md"], "exclude": [] },
+  "baselineFile": ".agents-context.baseline.json"
 }
