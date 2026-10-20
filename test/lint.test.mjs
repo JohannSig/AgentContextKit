@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanRepo, config, lint, makeRepo, put, run, shortLines } from './helpers.mjs';
+import { cleanRepo, config, git, lint, makeRepo, put, run, shortLines } from './helpers.mjs';
 
 const area = (body) => ({ 'svc/AGENTS.md': `# Svc\n\n${body}`, 'svc/CLAUDE.md': '@AGENTS.md\n' });
 
@@ -109,4 +109,24 @@ test('init scaffolds the new budgets, docs linting and the where-new-knowledge-g
   assert.equal(cfg.budgets.areaAgentsTokens, 3000);
   assert.deepEqual(cfg.docs.include, ['docs/**/*.md']);
   assert.match(readFileSync(join(repo, 'AGENTS.md'), 'utf8'), /Where new knowledge goes/);
+});
+
+test('a user ignore list adds to the defaults instead of replacing them', () => {
+  const repo = makeRepo({
+    ...cleanRepo(),
+    'skip/AGENTS.md': '# Skip\n\n' + shortLines(220), 'skip/CLAUDE.md': '@AGENTS.md\n',
+    'node_modules/x/AGENTS.md': '# X\n\n' + shortLines(220), 'node_modules/x/CLAUDE.md': '@AGENTS.md\n',
+    '.agents-context.json': config({ ignore: ['skip'] }),
+  });
+  assert.equal(lint(repo, '--strict').code, 0, lint(repo, '--strict').out);
+});
+
+test('git-ignored directories are not linted', () => {
+  const repo = makeRepo({
+    ...cleanRepo(),
+    '.gitignore': 'scratch/\n',
+    'scratch/AGENTS.md': '# Scratch\n\n' + shortLines(220), 'scratch/CLAUDE.md': '@AGENTS.md\n',
+  });
+  git(repo, 'init', '-q');
+  assert.equal(lint(repo, '--strict').code, 0, lint(repo, '--strict').out);
 });

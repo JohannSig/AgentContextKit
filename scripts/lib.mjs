@@ -1,5 +1,6 @@
 // Shared helpers for the agent-context kit. Zero dependencies. Node 18+.
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join, resolve, relative, sep } from 'node:path';
 
 export const DEFAULT_CONFIG = {
@@ -28,13 +29,23 @@ export const DEFAULT_CONFIG = {
 
 export const SHIM = '@AGENTS.md';
 
+/** Absolute paths of git-ignored directories (top of each ignored tree); [] when not a git repo. */
+function gitIgnoredDirs(root) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-files', '-o', '-i', '--exclude-standard', '--directory', '-z'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    return out.split('\0').filter((r) => r.endsWith('/')).map((r) => join(root, r.slice(0, -1)));
+  } catch {
+    return [];
+  }
+}
+
 export function loadConfig(root) {
   const p = join(root, '.agents-context.json');
-  if (!existsSync(p)) return DEFAULT_CONFIG;
-  const user = JSON.parse(readFileSync(p, 'utf8'));
+  const user = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {};
   return {
     budgets: { ...DEFAULT_CONFIG.budgets, ...(user.budgets ?? {}) },
-    ignore: user.ignore ?? DEFAULT_CONFIG.ignore,
+    // Defaults stay on: a user list adds to them. Git-ignored directories are skipped too.
+    ignore: [...new Set([...DEFAULT_CONFIG.ignore, ...(user.ignore ?? []), ...gitIgnoredDirs(root)])],
     docs: { ...DEFAULT_CONFIG.docs, ...(user.docs ?? {}) },
     baselineFile: user.baselineFile ?? DEFAULT_CONFIG.baselineFile,
   };
@@ -64,8 +75,8 @@ export const matchesAny = (patterns, relPath) => patterns.some((g) => globToRegE
 /** Walk the tree, skipping ignored dir names. Yields absolute file paths. */
 export function* walk(dir, ignore) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (ignore.includes(e.name)) continue;
     const p = join(dir, e.name);
+    if (ignore.includes(e.name) || ignore.includes(p)) continue;
     if (e.isDirectory()) yield* walk(p, ignore);
     else if (e.isFile()) yield p;
   }

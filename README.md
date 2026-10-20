@@ -83,7 +83,7 @@ node scripts/agents-sync.mjs <repo> --cursor --copilot      # generate other for
 
 `agents-init` never overwrites. `agents-lint` exits 1 on errors; `--strict` also fails on warnings. Put `agents-lint --strict` and `agents-sync --check` in CI once a repo is migrated.
 
-`.agents-context.json` at the repo root (dropped by `agents-init`) tunes lint: `ignore` lists directory names to skip (defaults cover `node_modules`, `bin`, `obj`, `dist`), `budgets` sets the limits below, `docs` opts docs pages into linting, `baselineFile` names the growth baseline. Raise `chainTokens` for deep monorepos, lower it for small libraries.
+`.agents-context.json` at the repo root (dropped by `agents-init`) tunes lint: `ignore` lists directory names to skip (added to the defaults `node_modules`, `bin`, `obj`, `dist`, `.anvil-worktrees`; git-ignored directories are always skipped), `budgets` sets the limits below, `docs` opts docs pages into linting, `baselineFile` names the growth baseline. Raise `chainTokens` for deep monorepos, lower it for small libraries.
 
 ## Guardrails: keeping it lean
 
