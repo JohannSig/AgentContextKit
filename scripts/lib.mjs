@@ -19,7 +19,9 @@ export const DEFAULT_CONFIG = {
     chainTokens: 8000,
     codexChainBytes: 32768,
   },
-  ignore: ['node_modules', '.git', 'dist', 'build', 'bin', 'obj', '.anvil-worktrees'],
+  // A bare name skips every directory of that name; an entry with a '/' skips that path from the repo root. `.claude/worktrees` holds full checkouts made by Claude Code:
+  // scanning them would count every instruction file twice.
+  ignore: ['node_modules', '.git', 'dist', 'build', 'bin', 'obj', '.anvil-worktrees', '.claude/worktrees'],
   // docs/ linting is opt-in: list glob patterns (relative to the repo root) for the pages you manage.
   docs: { include: [], exclude: [] },
   // Growth ratchet: written by `agents-lint --write-baseline`, checked whenever the file exists.
@@ -61,12 +63,12 @@ export function globToRegExp(glob) {
 }
 export const matchesAny = (patterns, relPath) => patterns.some((g) => globToRegExp(g).test(relPath));
 
-/** Walk the tree, skipping ignored dir names. Yields absolute file paths. */
-export function* walk(dir, ignore) {
+/** Walk the tree, skipping ignored names and paths (see DEFAULT_CONFIG.ignore). Yields absolute file paths. */
+export function* walk(dir, ignore, root = dir) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (ignore.includes(e.name)) continue;
-    const p = join(dir, e.name);
-    if (e.isDirectory()) yield* walk(p, ignore);
+    const p = join(dir, e.name), r = posix(relative(root, p));
+    if (ignore.some((g) => (g.includes('/') ? r === g || r.startsWith(g + '/') : g === e.name))) continue;
+    if (e.isDirectory()) yield* walk(p, ignore, root);
     else if (e.isFile()) yield p;
   }
 }
@@ -84,6 +86,24 @@ export function findImports(md) {
   src.forEach((l, i) => {
     for (const m of l.matchAll(re)) out.push({ line: i + 1, token: '@' + m[1] });
   });
+  return out;
+}
+
+const HTML_TAGS = new Set(['br', 'hr', 'p', 'div', 'span', 'img', 'a', 'b', 'i', 'u', 'em', 'strong', 'code', 'pre', 'kbd', 'sub', 'sup', 'details', 'summary', 'table', 'tr', 'td', 'th', 'ul', 'ol', 'li', 'picture', 'source', 'small', 'center', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+/** Template placeholders left behind (`# <Area name>`, `- <Convention ...>`, a whole line or table cell in angle brackets), outside code. Returns [{line, text}]. */
+export function findPlaceholders(md) {
+  const out = [];
+  stripCode(md).split(/\r?\n/).forEach((l, i) => {
+    const m = l.match(/^\s*(?:#{1,6}\s+|[-*]\s+)?<([A-Za-z][^<>|]*)>[.:]?\s*$/) || l.match(/\|\s*<([A-Za-z][^<>|]*)>\s*\|/);
+    if (m && !HTML_TAGS.has(m[1].trim().toLowerCase().split(/\s/)[0])) out.push({ line: i + 1, text: `<${m[1].trim()}>`.slice(0, 50) });
+  });
+  return out;
+}
+
+/** Headings that announce a change log or history section (the kit's rule: no change logs in instruction files). Returns [{line, text}]. */
+export function findChangelogHeadings(md) {
+  const out = [];
+  stripCode(md).split(/\r?\n/).forEach((l, i) => { if (/^#{1,6}\s*(?:change\s*log|history|release notes|recent changes|what'?s new|updates?)\b/i.test(l)) out.push({ line: i + 1, text: l.replace(/^#+\s*/, '').trim() }); });
   return out;
 }
 
