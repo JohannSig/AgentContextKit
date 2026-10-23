@@ -1,6 +1,6 @@
 {
   "name": "agent-context-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Tool-agnostic, token-lean layout for AI coding-agent instruction files (AGENTS.md + CLAUDE.md shims + path-scoped rules), with guardrails that keep it lean.",
   "type": "module",
   "private": true,
