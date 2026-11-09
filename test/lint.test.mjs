@@ -64,7 +64,7 @@ test('a page in a split directory that its index does not link is reported', () 
   const cfg = { '.agents-context.json': config({ docs: { include: ['docs/**/*.md'] } }) };
   const partial = makeRepo({ ...cleanRepo(), ...cfg, 'docs/x.md': '# X\n\n[a](x/a.md)\n', 'docs/x/a.md': '# A\n', 'docs/x/b.md': '# B\n' });
   assert.match(lint(partial).out, /docs\/x\.md: does not link 'docs\/x\/b\.md'/);
-  const full = makeRepo({ ...cleanRepo(), ...cfg, 'docs/x.md': '# X\n\n[a](x/a.md) [b](x/b.md)\n', 'docs/x/a.md': '# A\n', 'docs/x/b.md': '# B\n' });
+  const full = makeRepo({ ...cleanRepo(), 'AGENTS.md': cleanRepo()['AGENTS.md'] + '\nSee [x](docs/x.md).\n', ...cfg, 'docs/x.md': '# X\n\n[a](x/a.md) [b](x/b.md)\n', 'docs/x/a.md': '# A\n', 'docs/x/b.md': '# B\n' });
   assert.equal(lint(full, '--strict').code, 0);
 });
 

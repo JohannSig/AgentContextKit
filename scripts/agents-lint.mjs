@@ -7,7 +7,7 @@ import { writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   loadConfig, walk, read, lines, tokens, rel, SHIM, findImports, findLocalLinks,
-  parseFrontmatter, existsSync, fileSize, matchesAny,
+  parseFrontmatter, existsSync, fileSize, matchesAny, globToRegExp, findPlaceholders, findChangelogHeadings,
 } from './lib.mjs';
 
 const args = process.argv.slice(2);
@@ -20,10 +20,11 @@ const issues = [];
 const err = (file, msg) => issues.push({ level: 'error', file: rel(root, file), msg });
 const warn = (file, msg) => issues.push({ level: 'warn', file: rel(root, file), msg });
 
-const agents = [], claudes = [], rules = [], docsFiles = [];
+const agents = [], claudes = [], rules = [], docsFiles = [], allRel = [];
 for (const p of walk(root, cfg.ignore)) {
   const name = basename(p);
   const r = rel(root, p);
+  allRel.push(r);
   if (name === 'AGENTS.md') agents.push(p);
   else if (name === 'CLAUDE.md') claudes.push(p);
   else if (/^(?:.*\/)?\.claude\/rules\/.+\.md$/.test(r)) rules.push(p);
@@ -45,6 +46,12 @@ const checkLinks = (p, c) => {
 const tokenBudget = (p, t, limit, name) => {
   if (t > limit) warn(p, `~${t} tokens, ${name} budget ${limit}. Move task-specific sections to docs/ and link them.`);
 };
+// Leftovers of the templates, and change-log sections: both are cost with no value. (Strict mode fails on them.)
+const smells = (p, c, { changelog = true } = {}) => {
+  const ph = findPlaceholders(c);
+  if (ph.length) warn(p, `${ph.length} template placeholder(s) not filled in, first at line ${ph[0].line}: ${ph[0].text}. Fill them in or delete the line.`);
+  if (changelog) for (const h of findChangelogHeadings(c)) warn(p, `line ${h.line}: '${h.text}' reads like a change log. Instruction files describe what is true now; history belongs in git or docs/.`);
+};
 const longLines = (p, c) => {
   const over = [];
   c.split(/\r?\n/).forEach((l, i) => { if (l.length > B.maxLineChars) over.push({ line: i + 1, len: l.length }); });
@@ -61,6 +68,7 @@ for (const p of agents) {
   if (n > budget) warn(p, `${n} lines, budget ${budget}. Move task-specific sections to docs/ and link them.`);
   tokenBudget(p, tokens(fileSize(p)), isRoot(p) ? B.rootAgentsTokens : B.areaAgentsTokens, isRoot(p) ? 'rootAgentsTokens' : 'areaAgentsTokens');
   longLines(p, c);
+  smells(p, c);
   for (const { line, token } of findImports(c)) err(p, `line ${line}: '${token}' looks like an @import. Use a plain link; imports load eagerly in Claude Code and are ignored by other tools.`);
   checkLinks(p, c);
   if (!isRoot(p)) {
@@ -87,6 +95,7 @@ for (const p of claudes) {
       if (n > B.rootClaudeLines) warn(p, `${n} lines, budget ${B.rootClaudeLines}. Only Claude-specific extras belong here.`);
       for (const { line, token } of findImports(c).filter((i) => i.token !== SHIM)) err(p, `line ${line}: extra @import '${token}'. Only '${SHIM}' is allowed.`);
       checkLinks(p, c);
+      smells(p, c, { changelog: false });
     }
     continue;
   }
@@ -109,6 +118,8 @@ for (const p of rules) {
   if (n > B.ruleLines) warn(p, `${n} lines, budget ${B.ruleLines}.`);
   tokenBudget(p, tokens(Buffer.byteLength(fm.body)), B.ruleTokens, 'ruleTokens');
   longLines(p, fm.body);
+  smells(p, fm.body);
+  for (const g of fm.paths ?? []) if (!allRel.some((f) => globToRegExp(g).test(f))) warn(p, `'paths:' pattern '${g}' matches no file in the repo, so this rule never loads. Fix the pattern or delete the rule.`);
   for (const { line, token } of findImports(fm.body)) err(p, `line ${line}: '${token}' — @imports inside rules are NOT expanded by Claude Code (verified 2026-09). Inline the content or link it.`);
   checkLinks(p, fm.body);
 }
@@ -118,6 +129,16 @@ for (const p of docsFiles) {
   const t = tokens(fileSize(p));
   if (t > B.docsPageTokens) warn(p, `~${t} tokens, docsPageTokens budget ${B.docsPageTokens}. Split it into per-topic pages behind an index.`);
   checkLinks(p, read(p));
+  smells(p, read(p), { changelog: false });
+}
+// A docs page nobody links to is never found by an agent: every page must be reachable by links from an AGENTS.md, a CLAUDE.md, a rule, or a page that is.
+if (docsFiles.length) {
+  const targetsOf = (p) => findLocalLinks(read(p)).map((l) => resolve(l.target.startsWith('/') ? join(root, l.target) : join(dirname(p), l.target)));
+  const docSet = new Set(docsFiles.map((p) => resolve(p))), reach = new Set(), queue = [];
+  const visit = (p) => { for (const t of targetsOf(p)) if (docSet.has(t) && !reach.has(t)) { reach.add(t); queue.push(t); } };
+  [...agents, ...claudes, ...rules].forEach(visit);
+  while (queue.length) visit(queue.pop());
+  for (const p of docsFiles) if (!reach.has(resolve(p))) warn(p, `not linked from any AGENTS.md, CLAUDE.md, rule or reachable docs page: agents will never find it. Add a pointer in the nearest AGENTS.md or in its index.`);
 }
 // A split directory `docs/x/` must be fully listed in its index `docs/x.md`, or pages go stale unseen.
 for (const idx of docsFiles) {

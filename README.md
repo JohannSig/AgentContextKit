@@ -105,9 +105,35 @@ Tokens are estimated as bytes / 4. Line counts remain as a readability check.
 
 **Growth baseline.** Absolute budgets are set once and then have slack. The baseline closes it. `agents-lint --write-baseline` records every instruction file's size in `.agents-context.baseline.json`; commit it. From then on a file that grows past its recorded size (plus `baselineSlackTokens`), or a new instruction file that isn't listed, fails `--strict`. The fix is either to move the detail to `docs/` or to re-run `--write-baseline` in the same PR, which puts the growth in the diff for a reviewer to accept or reject. Set budgets just above today's sizes and lower them over time.
 
+**Rot checks.** Budgets bound size; these catch files that cost tokens or sit unused for other reasons. All are warnings (errors under `--strict`, like the rest):
+
+| Check | Why |
+|---|---|
+| A rule whose `paths:` pattern matches no file | the rule never loads and nobody notices (a typo, or a renamed folder) |
+| A docs page nothing links to, directly or through other pages | agents only find pages by following links; an orphaned runbook is dead weight and gets recreated |
+| Template placeholders left in a file (`# <Area name>`, `- <Convention ...>`, a `<path>` table cell) | a fresh `agents-init` file passes every other check while still saying nothing |
+| A heading such as "Changelog", "History" or "Recent changes" | instruction files say what is true now; the rule above forbids change logs |
+
+`ignore` entries without a `/` skip every directory of that name; entries with a `/` skip that path from the repo root. The defaults include `.claude/worktrees`, where Claude Code keeps full checkouts of the repo: scanning them counts every instruction file twice.
+
 **Telling agents.** The root template carries a "Where new knowledge goes" rule so agents that add features know: a rule needed on every edit is 1–3 lines in the area `AGENTS.md`; everything else goes to the matching `docs/` page and its index; no change logs.
 
 **What it can't do.** Judge value. In review, ask of each added line: *would removing this cause an agent to make mistakes?* If not, cut it.
+
+### Wiring it into a hook or CI
+
+Lint needs only Node, so a pre-push hook is the cheapest place for `--strict` (no CI minutes). When the kit is cloned next to your repos (or a few folders up, as when the repo lives inside a worktree folder), search for it and skip quietly when it is absent:
+
+```sh
+for d in .. ../.. ../../.. ../../../..; do
+  if [ -f "$d/AgentContextKit/scripts/agents-lint.mjs" ]; then
+    node "$d/AgentContextKit/scripts/agents-lint.mjs" . --strict || exit 1
+    break
+  fi
+done
+```
+
+For CI, or for anyone who does not have the kit, run it from GitHub (`npx -y -p github:JohannSig/AgentContextKit agents-lint . --strict`) or keep a dependency-free test of your own beside the repo's other tests; the checks that matter most (root file size, a shim beside every `AGENTS.md`, no `@path` imports, no dead links, every docs page indexed) take about 50 lines.
 
 Development: `npm test` (Node's built-in runner, no dependencies).
 
